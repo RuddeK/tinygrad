@@ -225,12 +225,14 @@ class Tensor(RandMixin):
     assign = self.uop.after(self.uop.store(x.uop))
     if (base := self.uop.base).op in {Ops.BUFFER, Ops.AFTER} and self.uop is not base and not self.uop.has_buffer_identity():
       # view assign: replace at the buffer-identity level (e.g. RESHAPE(BUFFER)) so @function's substitution catches it
-      ib = self.uop
-      while not ib.has_buffer_identity() and ib is not base: ib = ib.src[0]
-      assigned_ib = ib.after(assign)
-      preserves_view = {Ops.PERMUTE, Ops.FLIP, Ops.RESHAPE, Ops.EXPAND, Ops.PAD, Ops.SHRINK, Ops.INDEX, Ops.STACK, Ops.BITCAST,
-                        Ops.RANGE, Ops.END, Ops.AFTER, Ops.GROUP, Ops.SINK, Ops.DETACH}
-      _apply_map_to_tensors({ib: assigned_ib}, name="Embed View Assign", extra_filter=lambda node: node.op in preserves_view)
+      scope_tensors = [t for tref in list(all_tensors) if (t:=tref()) is not None and t.uop.base == base]
+      # get all Tensors and apply the map. always walk: replace exactly the nodes the map names, values are final
+      sink = UOp.sink(*[t.uop for t in scope_tensors])
+      new_sink = sink.substitute({base: base.after(assign)}, name=f"substitute Embed View Assign", walk=True)
+      # set the relevant uop to the realized UOps
+      for t,s,ns in zip(scope_tensors, sink.src, new_sink.src):
+        if s is ns: continue
+        t.uop = ns
     else:
       # simple assign
       self.uop = assign
